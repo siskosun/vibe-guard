@@ -30,6 +30,8 @@ jobs:
               raise RuntimeError("Uploaded source checksum mismatch")
           with tarfile.open(fileobj=io.BytesIO(data), mode="r:xz") as archive:
               for member in archive:
+                  if member.name == ".github/workflows/tests.yml":
+                      continue  # The workflow token cannot create another workflow.
                   if not member.isfile():
                       raise RuntimeError("Unsupported archive entry")
                   target = (root / member.name).resolve()
