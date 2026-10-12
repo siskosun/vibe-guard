@@ -1,0 +1,70 @@
+name: Import source bundle
+on:
+  push:
+    paths:
+      - bootstrap/source.tar.xz.b64
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify and import
+        run: |
+          python - <<'PY'
+          import base64
+          import hashlib
+          import io
+          import tarfile
+          from pathlib import Path
+
+          root = Path.cwd().resolve()
+          base64_file = root / "bootstrap/source.tar.xz.b64"
+          data = base64.b64decode(base64_file.read_text().strip(), validate=True)
+          expected = "21876cc9d175f8d0da8de4bdcec7f5eace2cf91226cb737b126d8dc6ce7fec76"
+          if hashlib.sha256(data).hexdigest() != expected:
+              raise RuntimeError("Uploaded source checksum mismatch")
+          with tarfile.open(fileobj=io.BytesIO(data), mode="r:xz") as archive:
+              for member in archive:
+                  if not member.isfile():
+                      raise RuntimeError("Unsupported archive entry")
+                  target = (root / member.name).resolve()
+                  if not target.is_relative_to(root):
+                      raise RuntimeError("Unsafe archive path")
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  stream = archive.extractfile(member)
+                  if stream is None:
+                      raise RuntimeError("Unreadable archive member")
+                  with stream, target.open("wb") as dest:
+                      while chunk := stream.read(1024 * 1024):
+                          dest.write(chunk)
+          base64_file.unlink()
+          (root / "bootstrap").rmdir()
+          PY
+      - name: Compile and run regression tests
+        run: |
+          python -m compileall -q vibe-guard/scripts
+          python -m unittest discover -s tests -v
+      - name: Rebuild distributable ZIP
+        run: |
+          python - <<'PY'
+          import zipfile
+          from pathlib import Path
+          root = Path("vibe-guard")
+          with zipfile.ZipFile("skill.zip","w",zipfile.ZIP_DEFLATED,compresslevel=9) as z:
+              for item in sorted(root.rglob("*")):
+                  if item.is_file() and "__pycache__" not in item.parts:
+                      z.write(item,item.as_posix())
+          PY
+      - name: Commit verified source and package
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "Import and test Vibe Guard v2.2 source"
+          git push
